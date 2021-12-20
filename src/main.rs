@@ -37,6 +37,9 @@ struct FrameTimer {
     frame_start: Instant,
     render_start: Instant,
     exact_sleep: Duration,
+    /// How early should we cut the sleep time by, to make sure we have enough time to render our
+    /// frame if it takes longer than expected? Increasing this number makes dropped frames less
+    /// likely, but increases motion-to-photon latency of user input rendered to screen.
     safety_margin: Duration,
 }
 impl FrameTimer {

@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use bevy::{
     prelude::*,
     render::{RenderApp, RenderStage},
@@ -21,7 +23,7 @@ fn main() {
 
     let render_app = app.sub_app(RenderApp);
     render_app
-        .insert_resource(FrameTimer::default())
+        .insert_resource(FrameTimer::new(60, Duration::from_micros(500)))
         .add_system_to_stage(RenderStage::Render, framerate_exact_limiter)
         .add_system_to_stage(RenderStage::Cleanup, framerate_limit_forward_estimator);
 
@@ -32,28 +34,28 @@ fn main() {
 struct FrameTimer {
     enabled: bool,
     framerate_target: u64,
-    frame_start: std::time::Instant,
-    render_start: std::time::Instant,
-    exact_sleep: std::time::Duration,
-    safety_margin: std::time::Duration,
+    frame_start: Instant,
+    render_start: Instant,
+    exact_sleep: Duration,
+    safety_margin: Duration,
 }
-impl Default for FrameTimer {
-    fn default() -> Self {
+impl FrameTimer {
+    fn new(framerate_limit: u64, margin: Duration) -> Self {
         FrameTimer {
             enabled: true,
-            frame_start: std::time::Instant::now(),
-            render_start: std::time::Instant::now(),
-            exact_sleep: std::time::Duration::from_millis(0),
-            framerate_target: 60,
-            safety_margin: std::time::Duration::from_micros(500),
+            frame_start: Instant::now(),
+            render_start: Instant::now(),
+            exact_sleep: Duration::from_millis(0),
+            framerate_target: framerate_limit,
+            safety_margin: margin,
         }
     }
 }
 
 /// How long we *think* we should sleep before starting to render the next frame
 fn framerate_limit_forward_estimator(mut timer: ResMut<FrameTimer>) {
-    let render_end = std::time::Instant::now();
-    let target_frametime = std::time::Duration::from_micros(1_000_000 / timer.framerate_target);
+    let render_end = Instant::now();
+    let target_frametime = Duration::from_micros(1_000_000 / timer.framerate_target);
     let last_frametime = render_end.duration_since(timer.frame_start);
     let last_render_time = last_frametime - timer.exact_sleep;
     let estimated_cpu_time_needed = last_render_time + timer.safety_margin;
@@ -61,18 +63,18 @@ fn framerate_limit_forward_estimator(mut timer: ResMut<FrameTimer>) {
     if timer.enabled {
         spin_sleep::sleep(estimated_sleep_time);
     }
-    timer.frame_start = std::time::Instant::now();
+    timer.frame_start = Instant::now();
 }
 
 fn framerate_exact_limiter(mut timer: ResMut<FrameTimer>) {
-    let system_start = std::time::Instant::now();
-    let target_frametime = std::time::Duration::from_micros(1_000_000 / timer.framerate_target);
+    let system_start = Instant::now();
+    let target_frametime = Duration::from_micros(1_000_000 / timer.framerate_target);
     let sleep_needed =
         target_frametime - target_frametime.min(system_start.duration_since(timer.render_start));
     if timer.enabled {
         spin_sleep::sleep(sleep_needed);
     }
-    timer.render_start = std::time::Instant::now();
+    timer.render_start = Instant::now();
     timer.exact_sleep = timer.render_start.duration_since(system_start);
 }
 

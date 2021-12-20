@@ -1,4 +1,5 @@
 use bevy::{
+    diagnostic::FrameTimeDiagnosticsPlugin,
     prelude::*,
     render::{RenderApp, RenderStage},
 };
@@ -22,43 +23,76 @@ fn main() {
 
     let render_app = app.sub_app(RenderApp);
     render_app
-        .insert_resource(FrameTimer {
-            enabled: true,
-            start: std::time::Instant::now(),
-            framerate_target: 60,
-            frametime_buffer: std::time::Duration::from_millis(3),
-        })
-        .add_system_to_stage(RenderStage::Cleanup, framerate_limiter);
+        .insert_resource(FrameTimer::default())
+        .add_system_to_stage(RenderStage::Render, framerate_exact_limiter)
+        .add_system_to_stage(RenderStage::Cleanup, framerate_limit_forward_estimator);
     //.add_system_to_stage(RenderStage::Cleanup, limiter_state);
     app.run();
+}
+
+#[derive(SystemLabel, Clone, Hash, Debug, Eq, PartialEq)]
+enum FrameLimit {
+    Estimate,
+    Exact,
 }
 
 #[derive(Debug)]
 struct FrameTimer {
     enabled: bool,
-    start: std::time::Instant,
+    frame_start: std::time::Instant,
+    exact_start: std::time::Instant,
+    render_start: std::time::Instant,
+    exact_sleep: std::time::Duration,
     framerate_target: u64,
-    frametime_buffer: std::time::Duration,
+    safety_margin: std::time::Duration,
 }
-
-fn framerate_limiter(mut timer: ResMut<FrameTimer>) {
-    let sys_start = std::time::Instant::now();
-    let frame_time = sys_start.duration_since(timer.start);
-    let target_frametime = std::time::Duration::from_micros(1_000_000 / timer.framerate_target);
-    let padded_frame_time = frame_time + timer.frametime_buffer;
-    let sleep_time = target_frametime - padded_frame_time.min(target_frametime);
-    // info!(
-    // "Frame Time: {:>6.2}ms, Target: {:>6.2}ms, Sleeping: {:>6.2}ms",
-    // (frame_time.as_micros() as f32) / 1000.0,
-    // (target_frametime.as_micros() as f32) / 1000.0,
-    // (sleep_time.as_micros() as f32) / 1000.0
-    // );
-    if timer.enabled {
-        while std::time::Instant::now().duration_since(sys_start) < sleep_time {
-            std::thread::sleep(std::time::Duration::from_micros(100));
+impl Default for FrameTimer {
+    fn default() -> Self {
+        FrameTimer {
+            enabled: true,
+            frame_start: std::time::Instant::now(),
+            render_start: std::time::Instant::now(),
+            exact_start: std::time::Instant::now(),
+            exact_sleep: std::time::Duration::from_millis(0),
+            framerate_target: 60,
+            safety_margin: std::time::Duration::from_micros(500),
         }
     }
-    timer.start = std::time::Instant::now();
+}
+
+/// How long we *think* we should sleep before starting to render the next frame
+fn framerate_limit_forward_estimator(mut timer: ResMut<FrameTimer>) {
+    let render_end = std::time::Instant::now();
+    let target_frametime = std::time::Duration::from_micros(1_000_000 / timer.framerate_target);
+    let last_frametime = render_end.duration_since(timer.frame_start);
+    let last_render_time = last_frametime - timer.exact_sleep;
+    let estimated_cpu_time_needed = last_render_time + timer.safety_margin;
+    let estimated_sleep_time = target_frametime - target_frametime.min(estimated_cpu_time_needed);
+    if timer.enabled {
+        spin_sleep::sleep(estimated_sleep_time);
+    }
+    timer.frame_start = std::time::Instant::now();
+    /*
+    info!(
+        "FT: {:>5.2}RT: {:>5.2}ms, EST: {:>5.2}ms, EXT: {:>5.2}ms",
+        last_frametime.as_micros() as f32 / 1000.,
+        last_render_time.as_micros() as f32 / 1000.,
+        estimated_sleep_time.as_micros() as f32 / 1000.,
+        timer.exact_sleep.as_micros() as f32 / 1000.,
+    );
+    */
+}
+
+fn framerate_exact_limiter(mut timer: ResMut<FrameTimer>) {
+    let system_start = std::time::Instant::now();
+    let target_frametime = std::time::Duration::from_micros(1_000_000 / timer.framerate_target);
+    let sleep_needed =
+        target_frametime - target_frametime.min(system_start.duration_since(timer.exact_start));
+    if timer.enabled {
+        spin_sleep::sleep(sleep_needed);
+    }
+    timer.exact_start = std::time::Instant::now();
+    timer.exact_sleep = timer.exact_start.duration_since(system_start);
 }
 
 /// set up a simple 3D scene
@@ -70,7 +104,7 @@ fn setup(
     // plane
     commands
         .spawn_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Plane { size: 5.0 })),
+            mesh: meshes.add(Mesh::from(shape::Plane { size: 25.0 })),
             material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
             ..Default::default()
         })

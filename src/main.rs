@@ -10,7 +10,7 @@ use bevy_mod_picking::{
 fn main() {
     let mut app = App::new();
     app.insert_resource(WindowDescriptor {
-        vsync: true, // Disabled for this demo to remove vsync as a source of input latency
+        vsync: true,
         ..Default::default()
     })
     .add_plugins(DefaultPlugins)
